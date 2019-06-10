@@ -31,6 +31,9 @@ mod eth;
 mod iir;
 use iir::*;
 
+mod storage;
+use storage::ADC_BUF;
+
 #[cfg(not(feature = "semihosting"))]
 fn init_log() {}
 
@@ -524,6 +527,8 @@ static mut ETHERNET: eth::Device = eth::Device::new();
 const TCP_RX_BUFFER_SIZE: usize = 8192;
 const TCP_TX_BUFFER_SIZE: usize = 8192;
 
+static ADC_LOGGING: AtomicU32 = AtomicU32::new(0);
+
 macro_rules! create_socket {
     ($set:ident, $rx_storage:ident, $tx_storage:ident, $target:ident) => (
         let mut $rx_storage = [0; TCP_RX_BUFFER_SIZE];
@@ -651,7 +656,6 @@ fn main() -> ! {
         SPIP.borrow(cs).replace(Some((spi1, spi2, spi4, spi5)));
     });
 
-    let mut last = 0;
     let mut server = Server::new();
     loop {
         // if ETHERNET_PENDING.swap(false, Ordering::Relaxed) { }
@@ -660,12 +664,22 @@ fn main() -> ! {
             let socket = &mut *sockets.get::<net::socket::TcpSocket>(tcp_handle0);
             if !(socket.is_open() || socket.is_listening()) {
                 socket.listen(1234).unwrap_or_else(|e| warn!("TCP listen error: {:?}", e));
-            } else if last != time && socket.can_send() {
-                last = time;
-                handle_status(socket, time);
+                ADC_LOGGING.store(0, Ordering::Relaxed);
+                cortex_m::interrupt::free(|_| unsafe { ADC_BUF.clear() });
+            } else if socket.can_send() {
+                socket.send(|buf| unsafe {
+                    let sent = ADC_BUF.dequeue_into(buf);
+                    (sent, sent)
+                }).unwrap();
+
+                if ADC_LOGGING.load(Ordering::Relaxed) == 0 {
+                    info!("start logging");
+                    ADC_LOGGING.store(1, Ordering::Relaxed);
+                }
             }
         }
         {
+
             let socket = &mut *sockets.get::<net::socket::TcpSocket>(tcp_handle1);
             if !(socket.is_open() || socket.is_listening()) {
                 socket.listen(1235).unwrap_or_else(|e| warn!("TCP listen error: {:?}", e));
@@ -758,25 +772,6 @@ impl Server {
     }
 }
 
-fn handle_status(socket: &mut net::socket::TcpSocket, time: u32) {
-    let s = unsafe { Status{
-        t: time,
-        x0: IIR_STATE[0][0],
-        y0: IIR_STATE[0][2],
-        x1: IIR_STATE[1][0],
-        y1: IIR_STATE[1][2],
-    }};
-    reply(socket, &s);
-}
-
-#[derive(Serialize)]
-struct Status {
-    t: u32,
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32
-}
 
 const SCALE: f32 = ((1 << 15) - 1) as f32;
 static mut IIR_STATE: [IIRState; 2] = [[0.; 5]; 2];
@@ -806,6 +801,16 @@ fn SPI1() {
             let d = y0 as i16 as u16 ^ 0x8000;
             let txdr = &spi2.txdr as *const _ as *mut u16;
             unsafe { ptr::write_volatile(txdr, d) };
+
+            if ADC_LOGGING.load(Ordering::Relaxed) == 1 {
+                unsafe {
+                    let sample = [a as u8, (a >> 8) as u8];
+                    ADC_BUF.enqueue_slice(&sample).unwrap_or_else(|_| {
+                        ADC_LOGGING.store(2, Ordering::Relaxed);
+                        error!("storage full");
+                    });
+                }
+            }
         }
 
         let sr = spi5.sr.read();
