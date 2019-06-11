@@ -664,8 +664,8 @@ fn main() -> ! {
             let socket = &mut *sockets.get::<net::socket::TcpSocket>(tcp_handle0);
             if !(socket.is_open() || socket.is_listening()) {
                 socket.listen(1234).unwrap_or_else(|e| warn!("TCP listen error: {:?}", e));
-                ADC_LOGGING.store(0, Ordering::Relaxed);
                 cortex_m::interrupt::free(|_| unsafe { ADC_BUF.clear() });
+                ADC_LOGGING.store(0, Ordering::Relaxed);
             } else if socket.can_send() {
                 socket.send(|buf| unsafe {
                     let sent = ADC_BUF.dequeue_into(buf);
