@@ -34,6 +34,9 @@ use iir::*;
 mod storage;
 use storage::ADC_BUF;
 
+mod random;
+use random::Prng;
+
 #[cfg(not(feature = "semihosting"))]
 fn init_log() {}
 
@@ -528,6 +531,7 @@ const TCP_RX_BUFFER_SIZE: usize = 8192;
 const TCP_TX_BUFFER_SIZE: usize = 8192;
 
 static ADC_LOGGING: AtomicU32 = AtomicU32::new(0);
+static mut PRNG: Prng = Prng::new(0xace1ace2);
 
 macro_rules! create_socket {
     ($set:ident, $rx_storage:ident, $tx_storage:ident, $target:ident) => (
@@ -664,7 +668,10 @@ fn main() -> ! {
             let socket = &mut *sockets.get::<net::socket::TcpSocket>(tcp_handle0);
             if !(socket.is_open() || socket.is_listening()) {
                 socket.listen(1234).unwrap_or_else(|e| warn!("TCP listen error: {:?}", e));
-                cortex_m::interrupt::free(|_| unsafe { ADC_BUF.clear() });
+                cortex_m::interrupt::free(|_| unsafe {
+                    ADC_BUF.clear();
+                    PRNG.reset();
+                });
                 ADC_LOGGING.store(0, Ordering::Relaxed);
             } else if socket.can_send() {
                 socket.send(|buf| unsafe {
@@ -786,6 +793,7 @@ fn SPI1() {
     #[cfg(feature = "bkpt")]
     cortex_m::asm::bkpt();
     cortex_m::interrupt::free(|cs| {
+        let logging = ADC_LOGGING.load(Ordering::Relaxed);
         let spip = SPIP.borrow(cs).borrow();
         let (spi1, spi2, spi4, spi5) = spip.as_ref().unwrap();
 
@@ -797,12 +805,21 @@ fn SPI1() {
             let rxdr = &spi1.rxdr as *const _ as *const u16;
             let a = unsafe { ptr::read_volatile(rxdr) };
             let x0 = f32::from(a as i16);
-            let y0 = unsafe { IIR_CH[0].update(&mut IIR_STATE[0], x0) };
-            let d = y0 as i16 as u16 ^ 0x8000;
+            let _ = unsafe { IIR_CH[0].update(&mut IIR_STATE[0], x0) };
+            let d;
+            if logging == 1 {
+                // unsafe { d = ((PRNG.next() as u16) >> 2) + 0x8000; };
+                // unsafe { y0 = ((PRNG.next() as i16) >> 4); };
+                // do this properly!
+                unsafe { d = (((PRNG.next() as i16) >> 4) as u16) + 0x7800; }
+            } else {
+                d = 0x7800 as u16;
+            }
+            // let d = y0 as i16 as u16 ^ 0x8000;
             let txdr = &spi2.txdr as *const _ as *mut u16;
             unsafe { ptr::write_volatile(txdr, d) };
 
-            if ADC_LOGGING.load(Ordering::Relaxed) == 1 {
+            if logging == 1 {
                 unsafe {
                     let sample = [a as u8, (a >> 8) as u8];
                     ADC_BUF.enqueue_slice(&sample).unwrap_or_else(|_| {
