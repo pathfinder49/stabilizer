@@ -32,6 +32,7 @@ cortex-m-rt = { version = "0.6", features = ["device"] }
 cortex-m-log = { version = "0.6", features = ["log-integration"] }
 log = "0.4"
 panic-semihosting = { version = "0.5", optional = true }
+panic-itm = { version = "0.4", optional = true }
 serde = { version = "1.0", features = ["derive"], default-features = false }
 heapless = { version = "0.5" }
 
@@ -56,6 +57,7 @@ rev = "da675dc3"
 
 [features]
 semihosting = ["panic-semihosting", "cortex-m-log/semihosting"]
+itm = ["panic-itm", "cortex-m-log/itm"]
 bkpt = [ ]
 
 [profile.dev]

@@ -7,7 +7,7 @@
 
 #[inline(never)]
 #[panic_handler]
-#[cfg(not(feature = "semihosting"))]
+#[cfg(not(any(feature = "semihosting", feature = "itm")))]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     let gpiod = unsafe { &*pac::GPIOD::ptr() };
     gpiod.odr.modify(|_, w| w.odr6().high().odr12().high());  // FP_LED_1, FP_LED_3
@@ -16,6 +16,9 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 #[cfg(feature = "semihosting")]
 extern crate panic_semihosting;
+
+#[cfg(feature = "itm")]
+extern crate panic_itm;
 
 #[macro_use]
 extern crate log;
@@ -38,19 +41,34 @@ mod eth;
 mod iir;
 use iir::*;
 
-#[cfg(not(feature = "semihosting"))]
-fn init_log() {}
+#[cfg(not(any(feature = "semihosting", feature = "itm")))]
+fn init_log(itm: pac::ITM) {}
 
-#[cfg(feature = "semihosting")]
-fn init_log() {
+#[cfg(any(feature = "semihosting", feature = "itm"))]
+fn init_log(itm: pac::ITM) {
     use log::LevelFilter;
     use cortex_m_log::log::{Logger, init as init_log};
+
+    #[cfg(feature = "semihosting")]
     use cortex_m_log::printer::semihosting::{InterruptOk, hio::HStdout};
+    #[cfg(feature = "itm")]
+    use cortex_m_log::{destination, modes::InterruptOk, printer::itm::ItmSync};
+
+    #[cfg(feature = "semihosting")]
     static mut LOGGER: Option<Logger<InterruptOk<HStdout>>> = None;
+    #[cfg(feature = "itm")]
+    static mut LOGGER: Option<Logger< ItmSync::<cortex_m_log::modes::InterruptOk> >> = None;
+
+    #[cfg(feature = "semihosting")]
+    let printer = InterruptOk::<_>::stdout().unwrap();
+    #[cfg(feature = "itm")]
+    let printer = ItmSync::<InterruptOk>::new(destination::Itm::new(itm));
+
     let logger = Logger {
-        inner: InterruptOk::<_>::stdout().unwrap(),
-        level: LevelFilter::Info,
+    inner: printer,
+    level: LevelFilter::Info,
     };
+
     let logger = unsafe {
         LOGGER.get_or_insert(logger)
     };
@@ -542,7 +560,7 @@ const APP: () = {
         let rcc = dp.RCC;
         rcc_reset(&rcc);
 
-        init_log();
+        init_log(cp.ITM);
         // info!("Version {} {}", build_info::PKG_VERSION, build_info::GIT_VERSION.unwrap());
         // info!("Built on {}", build_info::BUILT_TIME_UTC);
         // info!("{} {}", build_info::RUSTC_VERSION, build_info::TARGET);
