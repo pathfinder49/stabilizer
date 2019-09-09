@@ -695,10 +695,10 @@ const APP: () = {
                 } else if tick && socket.can_send() {
                     let s = iir_state.lock(|iir_state| Status {
                         t: time,
-                        x0: iir_state[0][0],
-                        y0: iir_state[0][2],
-                        x1: iir_state[1][0],
-                        y1: iir_state[1][2]
+                        x0: iir_state[0][0] as i32,
+                        y0: iir_state[0][2] as i32,
+                        x1: iir_state[1][0] as i32,
+                        y1: iir_state[1][2] as i32
                     });
                     json_reply(socket, &s);
                 }
@@ -810,10 +810,10 @@ struct Response<'a> {
 #[derive(Serialize)]
 struct Status {
     t: u32,
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32
 }
 
 fn json_reply<T: Serialize>(socket: &mut net::socket::TcpSocket, msg: &T) {
