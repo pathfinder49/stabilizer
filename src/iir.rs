@@ -11,6 +11,7 @@ pub struct IIR {
     pub y_offset: f32,
     pub y_min: f32,
     pub y_max: f32,
+    pub enable: bool
 }
 
 fn abs(x: f32) -> f32 {
@@ -81,6 +82,11 @@ impl IIR {
     }
 
     pub fn update(&self, xy: &mut IIRState, x0: f32) -> f32 {
+        if !self.enable {
+            // Don't update filter, just use last calculated output value
+            return xy[xy.len()/2];
+        }
+
         xy.rotate_right(1);
         xy[0] = x0;
         let y0 = macc(self.y_offset, xy, &self.ba);

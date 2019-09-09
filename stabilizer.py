@@ -16,8 +16,8 @@ class StabilizerConfig:
     async def connect(self, host, port=1235):
         self.reader, self.writer = await asyncio.open_connection(host, port)
 
-    async def set(self, channel, iir):
-        up = OD([("channel", channel), ("iir", iir.as_dict())])
+    async def set(self, channel, iir, enable=True, y_initial=None):
+        up = OD([("channel", channel), ("iir", iir.as_dict()), ("y_initial", y_initial)])
         s = json.dumps(up, separators=(",", ":"))
         assert "\n" not in s
         logger.debug("send %s", s)
@@ -39,6 +39,7 @@ class IIR:
         self.y_offset = 0.
         self.y_min = -self.full_scale - 1
         self.y_max = self.full_scale
+        self.enable = False
 
     def as_dict(self):
         iir = OD()
@@ -46,6 +47,7 @@ class IIR:
         iir["y_offset"] = self.y_offset
         iir["y_min"] = self.y_min
         iir["y_max"] = self.y_max
+        iir["enable"] = self.enable
         return iir
 
     def configure_pi(self, kp, ki, g=0.):
@@ -74,6 +76,9 @@ class IIR:
         b = self.ba[:3].sum()*self.full_scale
         self.y_offset = b*o
 
+    def set_enable(self, enable):
+        self.enable = enable
+
 
 if __name__ == "__main__":
     import argparse
@@ -88,6 +93,10 @@ if __name__ == "__main__":
     p.add_argument("-i", "--integral-gain", default=0., type=float,
                    help="Integral gain, in units of Hz, "
                         "sign taken from proportional-gain")
+    p.add_argument("-y0", "--y-initial", default=None, type=float,
+                   help="Reset integrator value to given output value")
+    p.add_argument("--disable", action="store_true",
+                   help="Disable control loop, holding last output value")
 
     args = p.parse_args()
 
@@ -99,9 +108,10 @@ if __name__ == "__main__":
         i = IIR()
         i.configure_pi(args.proportional_gain, args.integral_gain)
         i.set_x_offset(args.offset)
+        i.set_enable(not args.disable)
         s = StabilizerConfig()
         await s.connect(args.stabilizer)
         assert args.channel in range(2)
-        r = await s.set(args.channel, i)
+        r = await s.set(args.channel, i,  y_initial=args.y_initial)
 
     loop.run_until_complete(main())

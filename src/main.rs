@@ -545,7 +545,7 @@ const APP: () = {
         ethernet_periph: (pac::ETHERNET_MAC, pac::ETHERNET_DMA, pac::ETHERNET_MTL),
         #[init([[0.; 5]; 2])]
         iir_state: [IIRState; 2],
-        #[init([IIR { ba: [0., 0., 0., 0., 0.], y_offset: 0., y_min: -SCALE - 1., y_max: SCALE }; 2])]
+        #[init([IIR { ba: [0., 0., 0., 0., 0.], y_offset: 0., y_min: -SCALE - 1., y_max: SCALE, enable: true}; 2])]
         iir_ch: [IIR; 2],
         #[link_section = ".sram3.eth"]
         #[init(eth::Device::new())]
@@ -712,7 +712,15 @@ const APP: () = {
                 } else {
                     server.poll(socket, |req: &Request| {
                         if req.channel < 2 {
-                            iir_ch.lock(|iir_ch| iir_ch[req.channel as usize] = req.iir);
+                            iir_ch.lock(|iir_ch| {
+                                iir_ch[req.channel as usize] = req.iir;                             
+                            });
+                            iir_state.lock(|iir_state| {
+                                match req.y_initial {
+                                    Some(y_initial) => iir_state[req.channel as usize][2] = y_initial,
+                                    None => ()
+                                }
+                            });
                         }
                     });
                 }
@@ -799,6 +807,7 @@ const APP: () = {
 struct Request {
     channel: u8,
     iir: IIR,
+    y_initial: Option<f32>
 }
 
 #[derive(Serialize)]
