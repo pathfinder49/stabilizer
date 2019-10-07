@@ -189,6 +189,10 @@ fn rcc_pll_setup(rcc: &pac::RCC, flash: &pac::FLASH) {
          .spi45sel().pll2_q()
     );
     rcc.d3ccipr.modify(|_, w| w.spi6sel().pll2_q());
+
+    // LSI needed for DAC
+    rcc.csr.modify(|_, w| w.lsion().set_bit());
+    while rcc.csr.read().lsirdy().is_not_ready() {}
 }
 
 fn io_compensation_setup(syscfg: &pac::SYSCFG) {
@@ -516,6 +520,19 @@ fn dma1_setup(dma1: &pac::DMA1, dmamux1: &pac::DMAMUX1, ma: usize, pa0: usize, p
     dma1.st[1].cr.modify(|_, w| w.en().set_bit());
 }
 
+fn cpu_dac_setup(cpu_dac: &pac::DAC){
+    // (optional) Disable CPU-DAC internal output buffer
+    // cpu_dac.mcr.modify(|_, w| unsafe{
+    //                   w.mode1().bits(0b010)
+    //                    .mode2().bits(0b010)
+    //                    });
+    // enable CPU-DAC outputs 1 and 2
+    cpu_dac.cr.modify(|_, w|
+                      w.en1().set_bit()
+                       .en2().set_bit()
+                       );
+}
+
 const SCALE: f32 = ((1 << 15) - 1) as f32;
 
 #[link_section = ".sram1.datspi"]
@@ -543,6 +560,7 @@ const APP: () = {
         spi: (pac::SPI1, pac::SPI2, pac::SPI4, pac::SPI5),
         i2c: pac::I2C2,
         ethernet_periph: (pac::ETHERNET_MAC, pac::ETHERNET_DMA, pac::ETHERNET_MTL),
+        cpu_dac: pac::DAC,
         #[init([[0.; 5]; 2])]
         iir_state: [IIRState; 2],
         #[init([IIR { ba: [0., 0., 0., 0., 0.], y_offset: 0., y_min: -SCALE - 1., y_max: SCALE }; 2])]
@@ -637,10 +655,29 @@ const APP: () = {
 
         // c.schedule.tick(Instant::now()).unwrap();
 
+        // enable cpu_dac clock
+        rcc.apb1lenr.modify(|_, w| w.dac12en().set_bit());
+        rcc.apb1lenr.read().bits();
+        // manual suggests wait for domain to leave standby/sleep
+        while rcc.cr.read().d2ckrdy().is_not_ready() {}
+
+        // configure cpu_dac
+        let cpu_dacx = dp.DAC;
+        cpu_dac_setup(&cpu_dacx);
+
+        cpu_dacx.dhr12r1.write(|w| unsafe {w.dacc1dhr().bits(0x7ff)});
+        let dac1_out = cpu_dacx.dor1.read().dacc1dor().bits();
+        // cpu_dacx.dhr12r2.write(|w| unsafe {w.dacc2dhr().bits(0x7ff)});
+        let dac2_out = cpu_dacx.dor2.read().dacc2dor().bits();
+
+        info!("dor1:2 {:x}:{:x}", dac1_out, dac2_out);
+
+
         init::LateResources {
             spi: (spi1, spi2, spi4, spi5),
             i2c: i2c2,
             ethernet_periph: (dp.ETHERNET_MAC, dp.ETHERNET_DMA, dp.ETHERNET_MTL),
+            cpu_dac: cpu_dacx,
         }
     }
 
