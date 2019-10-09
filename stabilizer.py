@@ -84,31 +84,6 @@ class CPU_DAC:
 
     def set_out(self, out):
         assert out >= 0 and out <= 0xfff, "cpu dac setting out of range"
-        self.cpu_dac = out
-
-    def set_out_scaled(self, out):
-        assert out >= 0. and out <= 1.0, "cpu dac setting out of range"
-        self.cpu_dac = int(out*0xfff)
-
-    def set_en(self, en):
-        self.cpu_dac = en
-
-    def as_dict(self):
-        dac = OD()
-        dac["out"] = [float(_) for _ in self.out]
-        dac["en"] = self.en
-        return dac
-
-
-class CPU_DAC:
-    full_scale = 0xfff
-
-    def __init__(self):
-        self.en = True
-        self.out = np.zeros(1, np.float32)
-
-    def set_out(self, out):
-        assert out >= 0 and out <= 0xfff, "cpu dac setting out of range"
         self.out = out
 
     def set_out_scaled(self, out):
