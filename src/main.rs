@@ -35,6 +35,9 @@ use serde_json_core::{ser::to_string, de::from_slice};
 
 mod eth;
 
+mod cpu_dac;
+use cpu_dac::*;
+
 mod iir;
 use iir::*;
 
@@ -561,6 +564,8 @@ const APP: () = {
         i2c: pac::I2C2,
         ethernet_periph: (pac::ETHERNET_MAC, pac::ETHERNET_DMA, pac::ETHERNET_MTL),
         cpu_dac: pac::DAC,
+        #[init([CPU_DAC {out: 0x000, en: false}; 2])]
+        cpu_dac_ch: [CPU_DAC; 2],
         #[init([[0.; 5]; 2])]
         iir_state: [IIRState; 2],
         #[init([IIR { ba: [0., 0., 0., 0., 0.], y_offset: 0., y_min: -SCALE - 1., y_max: SCALE }; 2])]
@@ -665,11 +670,9 @@ const APP: () = {
         let cpu_dacx = dp.DAC;
         cpu_dac_setup(&cpu_dacx);
 
-        cpu_dacx.dhr12r1.write(|w| unsafe {w.dacc1dhr().bits(0x7ff)});
+        // read cpu_dac output registers
         let dac1_out = cpu_dacx.dor1.read().dacc1dor().bits();
-        // cpu_dacx.dhr12r2.write(|w| unsafe {w.dacc2dhr().bits(0x7ff)});
         let dac2_out = cpu_dacx.dor2.read().dacc2dor().bits();
-
         info!("dor1:2 {:x}:{:x}", dac1_out, dac2_out);
 
 
@@ -681,23 +684,26 @@ const APP: () = {
         }
     }
 
-    #[idle(resources = [ethernet, ethernet_periph, iir_state, iir_ch, i2c])]
+    // #[idle(resources = [ethernet, ethernet_periph, iir_state, iir_ch, i2c])]
+    #[idle(resources = [ethernet, ethernet_periph, cpu_dac, cpu_dac_ch,
+                        iir_state, iir_ch, i2c])]
     fn idle(c: idle::Context) -> ! {
         let (MAC, DMA, MTL) = c.resources.ethernet_periph;
 
         let hardware_addr = match eeprom::read_eui48(c.resources.i2c) {
             Err(_) => {
                 info!("Could not read EEPROM, using default MAC address");
-                net::wire::EthernetAddress([0x10, 0xE2, 0xD5, 0x00, 0x03, 0x00])
+                net::wire::EthernetAddress([0xb0, 0xd5, 0xcc, 0xfc, 0xfb, 0xf6])
             },
-            Ok(raw_mac) => net::wire::EthernetAddress(raw_mac)
+            // Ok(raw_mac) => net::wire::EthernetAddress(raw_mac)
+            Ok(raw_mac) => net::wire::EthernetAddress([0xb0, 0xd5, 0xcc, 0xfc, 0xfb, 0xf6])
         };
         info!("MAC: {}", hardware_addr);
 
         unsafe { c.resources.ethernet.init(hardware_addr, MAC, DMA, MTL) };
         let mut neighbor_cache_storage = [None; 8];
         let neighbor_cache = net::iface::NeighborCache::new(&mut neighbor_cache_storage[..]);
-        let local_addr = net::wire::IpAddress::v4(10, 0, 16, 99);
+        let local_addr = net::wire::IpAddress::v4(10, 255, 6, 169);
         let mut ip_addrs = [net::wire::IpCidr::new(local_addr, 24)];
         let mut iface = net::iface::EthernetInterfaceBuilder::new(c.resources.ethernet)
                     .ethernet_addr(hardware_addr)
@@ -716,6 +722,7 @@ const APP: () = {
         let mut server = Server::new();
         let mut iir_state: resources::iir_state = c.resources.iir_state;
         let mut iir_ch: resources::iir_ch = c.resources.iir_ch;
+        let mut cpu_dac_ch = c.resources.cpu_dac_ch;
         loop {
             // if ETHERNET_PENDING.swap(false, Ordering::Relaxed) { }
             let tick = Instant::now() > next_ms;
@@ -749,7 +756,8 @@ const APP: () = {
                 } else {
                     server.poll(socket, |req: &Request| {
                         if req.channel < 2 {
-                            iir_ch.lock(|iir_ch| iir_ch[req.channel as usize] = req.iir);
+                            iir_ch.lock(|iir_ch| iir_ch[req.channel as usize] = req.iir); // lock locks the resource and returns handle (rtfm)
+                            cpu_dac_ch[req.channel as usize] = req.cpu_dac;
                         }
                     });
                 }
@@ -762,6 +770,22 @@ const APP: () = {
             } {
                 // cortex_m::asm::wfi();
             }
+
+            c.resources.cpu_dac.cr.modify(|_, w| {
+                let mut temp = match cpu_dac_ch[0].en{
+                    true => w.en1().set_bit(),
+                    false => w.en1().clear_bit(),
+                };
+                match cpu_dac_ch[1].en{
+                    true => temp.en2().set_bit(),
+                    false => temp.en2().clear_bit(),
+                }
+            });
+
+            c.resources.cpu_dac.dhr12r1.write(|w| unsafe {
+                w.dacc1dhr().bits(cpu_dac_ch[0].out)});
+            c.resources.cpu_dac.dhr12r2.write(|w| unsafe {
+                w.dacc2dhr().bits(cpu_dac_ch[1].out)});
         }
     }
 
@@ -836,6 +860,7 @@ const APP: () = {
 struct Request {
     channel: u8,
     iir: IIR,
+    cpu_dac: CPU_DAC
 }
 
 #[derive(Serialize)]
@@ -873,7 +898,7 @@ impl Server {
         where
             T: DeserializeOwned,
             F: FnOnce(&T) -> R,
-    {
+    {// attempts to run f on received data, returns option of f(response)
         while socket.can_recv() {
             let found = socket.recv(|buf| {
                 let (len, found) = match buf.iter().position(|&c| c as char == '\n') {
