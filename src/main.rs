@@ -200,8 +200,9 @@ fn io_compensation_setup(syscfg: &pac::SYSCFG) {
     while syscfg.cccsr.read().ready().bit_is_clear() {}
 }
 
-fn gpio_setup(gpioa: &pac::GPIOA, gpiob: &pac::GPIOB, gpiod: &pac::GPIOD,
-              gpioe: &pac::GPIOE, gpiof: &pac::GPIOF, gpiog: &pac::GPIOG) {
+fn gpio_setup(gpioa: &pac::GPIOA, gpiob: &pac::GPIOB, gpioc: &pac::GPIOC,
+              gpiod: &pac::GPIOD, gpioe: &pac::GPIOE, gpiof: &pac::GPIOF,
+              gpiog: &pac::GPIOG) {
     // FP_LED0
     gpiod.otyper.modify(|_, w| w.ot5().push_pull());
     gpiod.moder.modify(|_, w| w.moder5().output());
@@ -346,6 +347,24 @@ fn gpio_setup(gpioa: &pac::GPIOA, gpiob: &pac::GPIOB, gpiod: &pac::GPIOD,
     gpioe.moder.modify(|_, w| w.moder15().output());
     gpioe.otyper.modify(|_, w| w.ot15().push_pull());
     gpioe.odr.modify(|_, w| w.odr15().low());
+
+    // SPI3 - current sense board
+    // SCK: PC10
+    gpioc.moder.modify(|_, w| w.moder10().alternate());
+    gpioc.otyper.modify(|_, w| w.ot10().push_pull());
+    gpioc.ospeedr.modify(|_, w| w.ospeedr10().very_high_speed());
+    gpioc.afrh.modify(|_, w| w.afr10().af6());
+    // MOSI: PC12
+    gpioc.moder.modify(|_, w| w.moder12().alternate());
+    gpioc.otyper.modify(|_, w| w.ot12().push_pull());
+    gpioc.ospeedr.modify(|_, w| w.ospeedr12().very_high_speed());
+    gpioc.afrh.modify(|_, w| w.afr12().af6());
+    // MISO: PB4
+    // NSS: PA15
+    gpioa.moder.modify(|_, w| w.moder15().alternate());
+    gpioa.otyper.modify(|_, w| w.ot15().push_pull());
+    gpioa.ospeedr.modify(|_, w| w.ospeedr15().very_high_speed());
+    gpioa.afrh.modify(|_, w| w.afr15().af6());
 }
 
 // ADC0
@@ -432,6 +451,7 @@ fn spi2_setup(spi2: &pac::SPI2) {
 
 // DAC1
 fn spi4_setup(spi4: &pac::SPI4) {
+    // AD5542
     spi4.cfg1.modify(|_, w|
         w.mbr().div2()
          .dsize().bits(16 - 1)
@@ -456,6 +476,62 @@ fn spi4_setup(spi4: &pac::SPI4) {
     spi4.cr2.modify(|_, w| w.tsize().bits(0));
     spi4.cr1.write(|w| w.spe().enabled());
     spi4.cr1.modify(|_, w| w.cstart().started());
+}
+
+// current-sense-board DAC
+fn spi3_setup(spi3: &pac::SPI3) {
+    // AD5541
+    // max 25 MHz
+    // 16 bit word
+    // Din changes on SCLK going low
+    // CS enables by going low on going low of SCLK
+    // no responses
+    // CPHA=0
+    // CPOL=0
+    // configure stabilizer as master
+    // want simplex mode (we only use MOSI => transimit only mode)
+    // hardware SS management (SSM=0) p. 2173
+    // SSOE=1
+    // c) => SSOM=1, SP=000, MIDI=2 (verify MIDI)
+
+    // DSIZE[4:0] = 01111 (u16)
+    // setup instructions p. 2178
+    // Write the proper GPIO registers: Configure GPIO for MOSI, MISO and SCK pins.
+    // Write to the SPI_CFG1 and SPI_CFG2
+    // Write to the SPI_CR2 register to select length of the transfer, if it is not known TSIZE has to be programmed to zero
+    //
+    // enable
+
+
+
+    spi3.cfg1.modify(|_, w|
+        w.mbr().div8()
+         .dsize().bits(16 - 1)
+         .fthlv().one_frame()
+    );
+    spi3.cfg2.modify(|_, w|
+        w.afcntr().controlled()
+         .ssom().not_asserted()
+         .ssoe().enabled()
+         .ssiop().active_low()
+         .ssm().disabled()
+         .cpol().idle_low()
+         .cpha().first_edge()
+         .lsbfrst().msbfirst()
+         .master().master()
+         .sp().motorola()
+         .comm().transmitter()
+         .ioswp().disabled()
+         .midi().bits(0)
+         .mssi().bits(0)
+    );
+    spi3.cr2.modify(|_, w| w.tsize().bits(0));
+    spi3.cr1.write(|w| w.spe().enabled());
+    spi3.cr1.modify(|_, w| w.cstart().started());
+
+    // write to spi 3
+    // let txdr = &spi3.txdr as *const _ as *mut u16;
+    // unsafe { ptr::write_volatile(txdr, as 0x7ff u16) };
 }
 
 fn tim2_setup(tim2: &pac::TIM2) {
@@ -584,7 +660,7 @@ const APP: () = {
             .gpiofen().set_bit()
             .gpiogen().set_bit()
         );
-        gpio_setup(&dp.GPIOA, &dp.GPIOB, &dp.GPIOD, &dp.GPIOE, &dp.GPIOF, &dp.GPIOG);
+        gpio_setup(&dp.GPIOA, &dp.GPIOB, &dp.GPIOC, &dp.GPIOD, &dp.GPIOE, &dp.GPIOF, &dp.GPIOG);
 
         rcc.apb1lenr.modify(|_, w| w.spi2en().set_bit());
         let spi2 = dp.SPI2;
@@ -636,6 +712,17 @@ const APP: () = {
         eth::setup_pins(&dp.GPIOA, &dp.GPIOB, &dp.GPIOC, &dp.GPIOG);
 
         // c.schedule.tick(Instant::now()).unwrap();
+
+        rcc.apb1lenr.modify(|_, w| w.spi3en().set_bit());
+        let spi3 = dp.SPI3;
+        spi3_setup(&spi3);
+
+        let d: u16 = 0xffff;
+        let txdr = &spi3.txdr as *const _ as *mut u16;
+        unsafe { ptr::write_volatile(txdr, d) };
+
+        // idea for server integration: if changed spawn interrupt
+
 
         init::LateResources {
             spi: (spi1, spi2, spi4, spi5),
