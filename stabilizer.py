@@ -16,8 +16,9 @@ class StabilizerConfig:
     async def connect(self, host, port=1235):
         self.reader, self.writer = await asyncio.open_connection(host, port)
 
-    async def set(self, channel, iir, dac):
-        up = OD([("channel", channel), ("iir", iir.as_dict()), ("cpu_dac", dac.as_dict())])
+    async def set(self, channel, iir, dac, gpio_hdr_word):
+        up = OD([("channel", channel), ("iir", iir.as_dict()),
+                ("cpu_dac", dac.as_dict()), ("gpio_hdr_spi", gpio_hdr_word)])
         s = json.dumps(up, separators=(",", ":"))
         assert "\n" not in s
         logger.debug("send %s", s)
@@ -100,6 +101,7 @@ class CPU_DAC:
         return dac
 
 
+
 if __name__ == "__main__":
     import argparse
 
@@ -129,6 +131,9 @@ if __name__ == "__main__":
                    help="CPU-DAC enable, 0 for off")
     p.add_argument("-d", "--cpu-dac-out", default=0, type=int,
                    help="CPU-DAC output, as u12 from GND to 2.04 V ")
+    p.add_argument("-g", "--gpio_hdr_word", default=0x7fff,
+                   type=lambda x: int(x, 0),
+                   help="16 bit word for gpio_hdr_spi")
 
     args = p.parse_args()
 
@@ -146,7 +151,7 @@ if __name__ == "__main__":
         s = StabilizerConfig()
         await s.connect(args.stabilizer)
         assert args.channel in range(2)
-        r = await s.set(args.channel, i, d)
+        r = await s.set(args.channel, i, d, args.gpio_hdr_word)
 
     loop.run_until_complete(main())
 

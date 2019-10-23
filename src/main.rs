@@ -642,6 +642,7 @@ const APP: () = {
         cpu_dac: pac::DAC,
         #[init([CPU_DAC {out: 0x000, en: false}; 2])]
         cpu_dac_ch: [CPU_DAC; 2],
+        gpio_hdr_spi: pac::SPI3,  // different use to spi1/2/4/5
         #[init([[0.; 5]; 2])]
         iir_state: [IIRState; 2],
         #[init([IIR { ba: [0., 0., 0., 0., 0.], y_offset: 0., y_min: -SCALE - 1., y_max: SCALE }; 2])]
@@ -741,7 +742,7 @@ const APP: () = {
         let spi3 = dp.SPI3;
         spi3_setup(&spi3);
 
-        let d: u16 = 0xffff;
+        let d: u16 = 0x7fff;
         let txdr = &spi3.txdr as *const _ as *mut u16;
         unsafe { ptr::write_volatile(txdr, d) };
 
@@ -769,12 +770,13 @@ const APP: () = {
             i2c: i2c2,
             ethernet_periph: (dp.ETHERNET_MAC, dp.ETHERNET_DMA, dp.ETHERNET_MTL),
             cpu_dac: cpu_dacx,
+            gpio_hdr_spi: spi3,
         }
     }
 
     // #[idle(resources = [ethernet, ethernet_periph, iir_state, iir_ch, i2c])]
     #[idle(resources = [ethernet, ethernet_periph, cpu_dac, cpu_dac_ch,
-                        iir_state, iir_ch, i2c])]
+                        iir_state, iir_ch, i2c, gpio_hdr_spi])]
     fn idle(c: idle::Context) -> ! {
         let (MAC, DMA, MTL) = c.resources.ethernet_periph;
 
@@ -811,6 +813,7 @@ const APP: () = {
         let mut iir_state: resources::iir_state = c.resources.iir_state;
         let mut iir_ch: resources::iir_ch = c.resources.iir_ch;
         let mut cpu_dac_ch = c.resources.cpu_dac_ch;
+        let mut gpio_hdr_spi = c.resources.gpio_hdr_spi;
         loop {
             // if ETHERNET_PENDING.swap(false, Ordering::Relaxed) { }
             let tick = Instant::now() > next_ms;
@@ -846,6 +849,9 @@ const APP: () = {
                         if req.channel < 2 {
                             iir_ch.lock(|iir_ch| iir_ch[req.channel as usize] = req.iir); // lock locks the resource and returns handle (rtfm)
                             cpu_dac_ch[req.channel as usize] = req.cpu_dac;
+                            let word: u16 = req.gpio_hdr_spi;
+                            let txdr = &gpio_hdr_spi.txdr as *const _ as *mut u16;
+                            unsafe { ptr::write_volatile(txdr, word) };
                         }
                     });
                 }
@@ -948,7 +954,8 @@ const APP: () = {
 struct Request {
     channel: u8,
     iir: IIR,
-    cpu_dac: CPU_DAC
+    cpu_dac: CPU_DAC,
+    gpio_hdr_spi: u16,
 }
 
 #[derive(Serialize)]
