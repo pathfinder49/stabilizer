@@ -485,32 +485,11 @@ fn spi4_setup(spi4: &pac::SPI4) {
     spi4.cr1.modify(|_, w| w.cstart().started());
 }
 
-// current-sense-board DAC
+// GPIO header SPI
 fn spi3_setup(spi3: &pac::SPI3) {
     // AD5541
     // max 25 MHz
     // 16 bit word
-    // Din changes on SCLK going low
-    // CS enables by going low on going low of SCLK
-    // no responses
-    // CPHA=0
-    // CPOL=0
-    // configure stabilizer as master
-    // want simplex mode (we only use MOSI => transimit only mode)
-    // hardware SS management (SSM=0) p. 2173
-    // SSOE=1
-    // c) => SSOM=1, SP=000, MIDI=2 (verify MIDI)
-
-    // DSIZE[4:0] = 01111 (u16)
-    // setup instructions p. 2178
-    // Write the proper GPIO registers: Configure GPIO for MOSI, MISO and SCK pins.
-    // Write to the SPI_CFG1 and SPI_CFG2
-    // Write to the SPI_CR2 register to select length of the transfer, if it is not known TSIZE has to be programmed to zero
-    //
-    // enable
-
-
-
     spi3.cfg1.modify(|_, w|
         w.mbr().div8()
          .dsize().bits(16 - 1)
@@ -535,10 +514,6 @@ fn spi3_setup(spi3: &pac::SPI3) {
     spi3.cr2.modify(|_, w| w.tsize().bits(0));
     spi3.cr1.write(|w| w.spe().enabled());
     spi3.cr1.modify(|_, w| w.cstart().started());
-
-    // write to spi 3
-    // let txdr = &spi3.txdr as *const _ as *mut u16;
-    // unsafe { ptr::write_volatile(txdr, as 0x7ff u16) };
 }
 
 fn tim2_setup(tim2: &pac::TIM2) {
@@ -846,8 +821,8 @@ const APP: () = {
                 } else {
                     server.poll(socket, |req: &Request| {
                         if req.channel < 2 {
-                            iir_ch.lock(|iir_ch| iir_ch[req.channel as usize] = req.iir); // lock locks the resource and returns handle (rtfm)
                             cpu_dac_ch[req.channel as usize] = req.cpu_dac;
+                            iir_ch.lock(|iir_ch| iir_ch[req.channel as usize] = req.iir);
                             let word: u16 = req.gpio_hdr_spi;
                             let txdr = &gpio_hdr_spi.txdr as *const _ as *mut u16;
                             unsafe { ptr::write_volatile(txdr, word) };
