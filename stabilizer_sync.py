@@ -4,6 +4,7 @@ from collections import OrderedDict as OD
 import logging
 
 import numpy as np
+import serial
 
 logger = logging.getLogger()
 
@@ -13,16 +14,16 @@ class StabilizerError(Exception):
 
 
 class StabilizerConfig:
-    async def connect(self, host, port=1235):
-        self.reader, self.writer = await asyncio.open_connection(host, port)
+    def connect(self, host, port=1235):
+        self.dev = serial.serial_for_url("socket://"+host+":"+str(port))
 
-    async def set(self, channel, iir, dac):
+    def set(self, channel, iir, dac):
         up = OD([("channel", channel), ("iir", iir.as_dict()), ("cpu_dac", dac.as_dict())])
         s = json.dumps(up, separators=(",", ":"))
         assert "\n" not in s
         logger.debug("send %s", s)
-        self.writer.write(s.encode() + b"\n")
-        r = (await self.reader.readline()).decode()
+        self.dev.write(s.encode() + b"\n")
+        r = (self.dev.readline()).decode()
         logger.debug("recv %s", r)
         ret = json.loads(r, object_pairs_hook=OD)
         if ret["code"] != 200:
@@ -136,7 +137,7 @@ if __name__ == "__main__":
     # loop.set_debug(True)
     logging.basicConfig(level=logging.DEBUG)
 
-    async def main():
+    def main():
         d = CPU_DAC()
         d.set_out(args.cpu_dac_out)
         d.set_en(args.cpu_dac_en)
@@ -144,9 +145,10 @@ if __name__ == "__main__":
         i.configure_pi(args.proportional_gain, args.integral_gain)
         i.set_x_offset(args.offset)
         s = StabilizerConfig()
-        await s.connect(args.stabilizer)
+        s.connect(args.stabilizer)
         assert args.channel in range(2)
-        r = await s.set(args.channel, i, d)
+        r = s.set(args.channel, i, d)
 
-    loop.run_until_complete(main())
+
+    main()
 
