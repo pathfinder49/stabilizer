@@ -783,17 +783,16 @@ const APP: () = {
         let hardware_addr = match eeprom::read_eui48(c.resources.i2c) {
             Err(_) => {
                 info!("Could not read EEPROM, using default MAC address");
-                net::wire::EthernetAddress([0xb0, 0xd5, 0xcc, 0xfc, 0xfb, 0xf6])
+                net::wire::EthernetAddress([0x10, 0xE2, 0xD5, 0x00, 0x03, 0x00])
             },
-            // Ok(raw_mac) => net::wire::EthernetAddress(raw_mac)
-            Ok(raw_mac) => net::wire::EthernetAddress([0xb0, 0xd5, 0xcc, 0xfc, 0xfb, 0xf6])
+            Ok(raw_mac) => net::wire::EthernetAddress(raw_mac)
         };
         info!("MAC: {}", hardware_addr);
 
         unsafe { c.resources.ethernet.init(hardware_addr, MAC, DMA, MTL) };
         let mut neighbor_cache_storage = [None; 8];
         let neighbor_cache = net::iface::NeighborCache::new(&mut neighbor_cache_storage[..]);
-        let local_addr = net::wire::IpAddress::v4(10, 255, 6, 169);
+        let local_addr = net::wire::IpAddress::v4(10, 0, 16, 99);
         let mut ip_addrs = [net::wire::IpCidr::new(local_addr, 24)];
         let mut iface = net::iface::EthernetInterfaceBuilder::new(c.resources.ethernet)
                     .ethernet_addr(hardware_addr)
