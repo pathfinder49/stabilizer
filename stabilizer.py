@@ -117,7 +117,7 @@ if __name__ == "__main__":
 
 
     p = argparse.ArgumentParser()
-    p.add_argument("-s", "--stabilizer", default="10.255.6.169")
+    p.add_argument("-s", "--stabilizer", default="10.0.16.99")
     p.add_argument("-c", "--channel", default=0, type=int,
                    help="Stabilizer channel to configure")
     p.add_argument("-o", "--offset", default=0., type=float,
