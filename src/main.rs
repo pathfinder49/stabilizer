@@ -848,6 +848,10 @@ const APP: () = {
                             let word: u16 = req.gpio_hdr_spi;
                             let txdr = &gpio_hdr_spi.txdr as *const _ as *mut u16;
                             unsafe { ptr::write_volatile(txdr, word) };
+
+
+                            let gpiod = unsafe { &*pac::GPIOD::ptr() };
+                            gpiod.odr.modify(|_, w| w.odr6().low().odr12().low().odr5().high());  // FP_LED_1, FP_LED_3
                         }
                     });
                 }
@@ -922,6 +926,10 @@ const APP: () = {
     fn spi1(c: spi1::Context) {
         #[cfg(feature = "bkpt")]
         cortex_m::asm::bkpt();
+
+        let gpiod = unsafe { &*pac::GPIOD::ptr() };
+        gpiod.odr.modify(|_, w| w.odr6().high().odr12().high());  // FP_LED_1, FP_LED_3
+
         let (spi1, spi2, spi4, spi5) = c.resources.spi;
         let iir_ch = c.resources.iir_ch;
         let iir_state = c.resources.iir_state;
