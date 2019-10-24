@@ -1,15 +1,8 @@
-use core::ops::{Add, Mul};
 use serde::{Serialize, Deserialize};
-// use serde::de::{self, Deserializer, Unexpected};
-
-use core::{f32, u16};
-
-// pub type CPU_DACState = [u16; 1];
 
 #[derive(Copy,Clone,Deserialize,Serialize)]
 pub struct CPU_DAC {
     pub out: u16,
-    // #[serde(deserialize_with = "bool_from_int")]
     pub en: bool,
 }
 

@@ -198,9 +198,9 @@ fn rcc_pll_setup(rcc: &pac::RCC, flash: &pac::FLASH) {
     );
     rcc.d3ccipr.modify(|_, w| w.spi6sel().pll2_q());
 
-    // LSI needed for DAC
-    rcc.csr.modify(|_, w| w.lsion().set_bit());
-    while rcc.csr.read().lsirdy().is_not_ready() {}
+    // // LSI needed for DAC
+    // rcc.csr.modify(|_, w| w.lsion().set_bit());
+    // while rcc.csr.read().lsirdy().is_not_ready() {}
 }
 
 fn io_compensation_setup(syscfg: &pac::SYSCFG) {
@@ -620,7 +620,7 @@ const APP: () = {
         i2c: pac::I2C2,
         ethernet_periph: (pac::ETHERNET_MAC, pac::ETHERNET_DMA, pac::ETHERNET_MTL),
         cpu_dac: pac::DAC,
-        #[init([CPU_DAC {out: 0x000, en: false}; 2])]
+        #[init([CPU_DAC {out: 0, en: false}; 2])]
         cpu_dac_ch: [CPU_DAC; 2],
         gpio_hdr_spi: pac::SPI3,  // different use to spi1/2/4/5
         // #[init(storage::RingBuffer<u8> {
@@ -696,6 +696,31 @@ const APP: () = {
         spi5_setup(&spi5);
         // spi5.ier.write(|w| w.eotie().set_bit());
 
+        // moveing before DMA configuration fixed broken SPI interrupt loop
+        rcc.apb1lenr.modify(|_, w| w.spi3en().set_bit());
+        let spi3 = dp.SPI3;
+        spi3_setup(&spi3);
+
+        // enable cpu_dac clock
+        rcc.apb1lenr.modify(|_, w| w.dac12en().set_bit());
+        // manual suggests wait for domain to leave standby/sleep
+        while rcc.cr.read().d2ckrdy().is_not_ready() {}
+
+        // configure cpu_dac
+        let cpu_dacx = dp.DAC;
+        cpu_dac_setup(&cpu_dacx);
+
+        // // read cpu_dac output registers
+        let dac1_out = cpu_dacx.dor1.read().dacc1dor().bits();
+        let dac2_out = cpu_dacx.dor2.read().dacc2dor().bits();
+        info!("dor1:2 {:x}:{:x}", dac1_out, dac2_out);
+
+
+
+        let d: u16 = 0x7fff;
+        let txdr = &spi3.txdr as *const _ as *mut u16;
+        unsafe { ptr::write_volatile(txdr, d) };
+
         rcc.ahb2enr.modify(|_, w|
             w
                 .sram1en().set_bit()
@@ -730,33 +755,6 @@ const APP: () = {
         // c.schedule.tick(Instant::now()).unwrap();
 
 
-        rcc.apb1lenr.modify(|_, w| w.spi3en().set_bit());
-        let spi3 = dp.SPI3;
-        spi3_setup(&spi3);
-
-        let d: u16 = 0x7fff;
-        let txdr = &spi3.txdr as *const _ as *mut u16;
-        unsafe { ptr::write_volatile(txdr, d) };
-
-        // idea for server integration: if changed spawn interrupt
-
-        // enable cpu_dac clock
-        rcc.apb1lenr.modify(|_, w| w.dac12en().set_bit());
-        rcc.apb1lenr.read().bits();
-        // manual suggests wait for domain to leave standby/sleep
-        while rcc.cr.read().d2ckrdy().is_not_ready() {}
-
-        // configure cpu_dac
-        let cpu_dacx = dp.DAC;
-        cpu_dac_setup(&cpu_dacx);
-
-        // read cpu_dac output registers
-        let dac1_out = cpu_dacx.dor1.read().dacc1dor().bits();
-        let dac2_out = cpu_dacx.dor2.read().dacc2dor().bits();
-        info!("dor1:2 {:x}:{:x}", dac1_out, dac2_out);
-
-
-
         init::LateResources {
             spi: (spi1, spi2, spi4, spi5),
             i2c: i2c2,
@@ -769,6 +767,8 @@ const APP: () = {
     // #[idle(resources = [ethernet, ethernet_periph, iir_state, iir_ch, i2c])]
     #[idle(resources = [ethernet, ethernet_periph, cpu_dac, cpu_dac_ch,
                         iir_state, iir_ch, i2c, gpio_hdr_spi, adc_logging])]
+    // #[idle(resources = [ethernet, ethernet_periph,
+    //                     iir_state, iir_ch, i2c, gpio_hdr_spi, adc_logging])]
     fn idle(c: idle::Context) -> ! {
         let (MAC, DMA, MTL) = c.resources.ethernet_periph;
 
@@ -824,13 +824,15 @@ const APP: () = {
                 } else if !(socket.is_open() || socket.is_listening()) {
                     socket.listen(1234).unwrap_or_else(|e| warn!("TCP listen error: {:?}", e));
                 } else if tick && socket.can_send() {
-                    let s = iir_state.lock(|iir_state| Status {
+                    let mut buf = [0u8; 10];
+                    unsafe {storage::ADC_BUF.dequeue_into(&mut buf)};
+                    let s = iir_state.lock(|iir_state| (Status {
                         t: time,
                         x0: iir_state[0][0],
                         y0: iir_state[0][2],
                         x1: iir_state[1][0],
                         y1: iir_state[1][2]
-                    });
+                    }, buf));
                     json_reply(socket, &s);
                 }
             }
@@ -848,7 +850,6 @@ const APP: () = {
                             let word: u16 = req.gpio_hdr_spi;
                             let txdr = &gpio_hdr_spi.txdr as *const _ as *mut u16;
                             unsafe { ptr::write_volatile(txdr, word) };
-
 
                             let gpiod = unsafe { &*pac::GPIOD::ptr() };
                             gpiod.odr.modify(|_, w| w.odr6().low().odr12().low().odr5().high());  // FP_LED_1, FP_LED_3
@@ -935,7 +936,7 @@ const APP: () = {
         let iir_state = c.resources.iir_state;
         let mut adc_logging = c.resources.adc_logging;
         let sr = spi1.sr.read();
-        *adc_logging = sr.bits();
+        // *adc_logging = sr.bits();
         if sr.eot().bit_is_set() {
             spi1.ifcr.write(|w| w.eotc().set_bit());
         }
@@ -948,15 +949,15 @@ const APP: () = {
             let txdr = &spi2.txdr as *const _ as *mut u16;
             unsafe { ptr::write_volatile(txdr, d) };
 
-            // if *adc_logging == 1 {
-            //      unsafe {
-            //             let sample = [a as u8, (a >> 8) as u8];
-            //             storage::ADC_BUF.enqueue_slice(&sample).unwrap_or_else(|_| {
-            //                 *adc_logging = 2;
-            //                 error!("storage full");
-            //             });
-            //         }
-            // }
+            if *adc_logging == 1 {
+                 unsafe {
+                        let sample = [a as u8, (a >> 8) as u8];
+                        storage::ADC_BUF.enqueue_slice(&sample).unwrap_or_else(|_| {
+                            *adc_logging = 2;
+                            error!("storage full");
+                        });
+                    }
+            }
         }
 
         let sr = spi5.sr.read();
