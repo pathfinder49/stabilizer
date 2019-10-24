@@ -41,6 +41,8 @@ mod eth;
 mod cpu_dac;
 use cpu_dac::*;
 
+mod storage;
+
 mod iir;
 use iir::*;
 
@@ -621,6 +623,16 @@ const APP: () = {
         #[init([CPU_DAC {out: 0x000, en: false}; 2])]
         cpu_dac_ch: [CPU_DAC; 2],
         gpio_hdr_spi: pac::SPI3,  // different use to spi1/2/4/5
+        // #[init(storage::RingBuffer<u8> {
+        //     storage: [0 as u8; storage::STORAGE_SIZE],
+        //     tail: AtomicUsize::new(0),
+        //     head: AtomicUsize::new(0),
+        //     write_lock: AtomicBool::new(false),
+        //     read_lock: AtomicBool::new(false)
+        // })]
+        // adc_buf: RingBuffer<u8>,
+        #[init(0 as u32)]
+        adc_logging: u32,
         #[init([[0.; 5]; 2])]
         iir_state: [IIRState; 2],
         #[init([IIR { ba: [0., 0., 0., 0., 0.], y_offset: 0., y_min: -SCALE - 1., y_max: SCALE }; 2])]
@@ -675,8 +687,10 @@ const APP: () = {
         rcc.apb2enr.modify(|_, w| w.spi1en().set_bit());
         let spi1 = dp.SPI1;
         spi1_setup(&spi1);
-        spi1.ier.write(|w| w.eotie().set_bit());
-
+        spi1.ier.write(|w| w.eotie().set_bit()
+                       // .rxpie().set_bit()
+                       );
+        info!("spi1 ier: {}", spi1.ier.read().bits());
         rcc.apb2enr.modify(|_, w| w.spi5en().set_bit());
         let spi5 = dp.SPI5;
         spi5_setup(&spi5);
@@ -754,23 +768,25 @@ const APP: () = {
 
     // #[idle(resources = [ethernet, ethernet_periph, iir_state, iir_ch, i2c])]
     #[idle(resources = [ethernet, ethernet_periph, cpu_dac, cpu_dac_ch,
-                        iir_state, iir_ch, i2c, gpio_hdr_spi])]
+                        iir_state, iir_ch, i2c, gpio_hdr_spi, adc_logging])]
     fn idle(c: idle::Context) -> ! {
         let (MAC, DMA, MTL) = c.resources.ethernet_periph;
 
         let hardware_addr = match eeprom::read_eui48(c.resources.i2c) {
             Err(_) => {
                 info!("Could not read EEPROM, using default MAC address");
-                net::wire::EthernetAddress([0x10, 0xE2, 0xD5, 0x00, 0x03, 0x00])
+                net::wire::EthernetAddress([0xb0, 0xd5, 0xcc, 0xfc, 0xfb, 0xf6])
+
             },
-            Ok(raw_mac) => net::wire::EthernetAddress(raw_mac)
+            // Ok(raw_mac) => net::wire::EthernetAddress(raw_mac)
+            Ok(raw_mac) => net::wire::EthernetAddress([0xb0, 0xd5, 0xcc, 0xfc, 0xfb, 0xf6])
         };
         info!("MAC: {}", hardware_addr);
 
         unsafe { c.resources.ethernet.init(hardware_addr, MAC, DMA, MTL) };
         let mut neighbor_cache_storage = [None; 8];
         let neighbor_cache = net::iface::NeighborCache::new(&mut neighbor_cache_storage[..]);
-        let local_addr = net::wire::IpAddress::v4(10, 0, 16, 99);
+        let local_addr = net::wire::IpAddress::v4(10, 255, 6, 169);
         let mut ip_addrs = [net::wire::IpCidr::new(local_addr, 24)];
         let mut iface = net::iface::EthernetInterfaceBuilder::new(c.resources.ethernet)
                     .ethernet_addr(hardware_addr)
@@ -781,6 +797,7 @@ const APP: () = {
         let mut sockets = net::socket::SocketSet::new(&mut socket_set_entries[..]);
         create_socket!(sockets, tcp_rx_storage0, tcp_tx_storage0, tcp_handle0);
         create_socket!(sockets, tcp_rx_storage0, tcp_tx_storage0, tcp_handle1);
+        create_socket!(sockets, tcp_rx_storage0, tcp_tx_storage0, tcp_handle2);
 
         // unsafe { eth::enable_interrupt(DMA); }
         let mut time = 0u32;
@@ -791,6 +808,8 @@ const APP: () = {
         let mut iir_ch: resources::iir_ch = c.resources.iir_ch;
         let mut cpu_dac_ch = c.resources.cpu_dac_ch;
         let mut gpio_hdr_spi = c.resources.gpio_hdr_spi;
+        // let mut adc_buf = c.resources.adc_buf;
+        let mut adc_logging = c.resources.adc_logging;
         loop {
             // if ETHERNET_PENDING.swap(false, Ordering::Relaxed) { }
             let tick = Instant::now() > next_ms;
@@ -834,6 +853,35 @@ const APP: () = {
                 }
             }
 
+            adc_logging.lock(|temp| info!("{:?}", *temp));
+            {
+                let socket = &mut *sockets.get::<net::socket::TcpSocket>(tcp_handle2);
+                if socket.state() == net::socket::TcpState::CloseWait {
+                    socket.close();
+                    // info!("close");
+                } else if !(socket.is_open() || socket.is_listening()) {
+                    socket.listen(1236).unwrap_or_else(|e| warn!("TCP listen error: {:?}", e));
+                    adc_logging.lock(|adc_logging| *adc_logging = 0);
+                    cortex_m::interrupt::free(|_| unsafe { storage::ADC_BUF.clear() });
+                    // info!("clear buf");
+                } else if socket.can_send() {
+                    // info!("write");
+                    socket.send(|buf| unsafe {
+                        let sent = storage::ADC_BUF.dequeue_into(buf);
+                        // info!("{:?}", sent);
+                        (sent, sent)
+                    }).unwrap();
+
+                    adc_logging.lock(|adc_logging|
+                                     if *adc_logging == 0 {
+                                        info!("start logging");
+                                        *adc_logging = 1;
+                                     })
+                }
+            }
+
+            adc_logging.lock(|temp| info!("{:?}", *temp));
+
             if !match iface.poll(&mut sockets, net::time::Instant::from_millis(time as i64)) {
                 Ok(changed) => changed,
                 Err(net::Error::Unrecognized) => true,
@@ -870,15 +918,16 @@ const APP: () = {
 
     // seems to slow it down
     // #[link_section = ".data.spi1"]
-    #[task(binds = SPI1, resources = [spi, iir_state, iir_ch], priority = 2)]
+    #[task(binds = SPI1, resources = [spi, iir_state, iir_ch, adc_logging], priority = 2)]
     fn spi1(c: spi1::Context) {
         #[cfg(feature = "bkpt")]
         cortex_m::asm::bkpt();
         let (spi1, spi2, spi4, spi5) = c.resources.spi;
         let iir_ch = c.resources.iir_ch;
         let iir_state = c.resources.iir_state;
-
+        let mut adc_logging = c.resources.adc_logging;
         let sr = spi1.sr.read();
+        *adc_logging = sr.bits();
         if sr.eot().bit_is_set() {
             spi1.ifcr.write(|w| w.eotc().set_bit());
         }
@@ -890,6 +939,16 @@ const APP: () = {
             let d = y0 as i16 as u16 ^ 0x8000;
             let txdr = &spi2.txdr as *const _ as *mut u16;
             unsafe { ptr::write_volatile(txdr, d) };
+
+            // if *adc_logging == 1 {
+            //      unsafe {
+            //             let sample = [a as u8, (a >> 8) as u8];
+            //             storage::ADC_BUF.enqueue_slice(&sample).unwrap_or_else(|_| {
+            //                 *adc_logging = 2;
+            //                 error!("storage full");
+            //             });
+            //         }
+            // }
         }
 
         let sr = spi5.sr.read();
