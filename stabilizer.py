@@ -17,7 +17,9 @@ class StabilizerConfig:
         self.reader, self.writer = await asyncio.open_connection(host, port)
 
     async def set(self, channel, iir, dac):
-        up = OD([("channel", channel), ("iir", iir.as_dict()), ("cpu_dac", dac.as_dict())])
+        up = OD([("channel", channel), ("iir", iir.as_dict()),
+                # ("cpu_dac", dac.as_dict())
+                ])
         s = json.dumps(up, separators=(",", ":"))
         assert "\n" not in s
         logger.debug("send %s", s)

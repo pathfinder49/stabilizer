@@ -194,8 +194,8 @@ fn rcc_pll_setup(rcc: &pac::RCC, flash: &pac::FLASH) {
     rcc.d3ccipr.modify(|_, w| w.spi6sel().pll2_q());
 
     // LSI needed for DAC
-    rcc.csr.modify(|_, w| w.lsion().set_bit());
-    while rcc.csr.read().lsirdy().is_not_ready() {}
+    // rcc.csr.modify(|_, w| w.lsion().set_bit());
+    // while rcc.csr.read().lsirdy().is_not_ready() {}
 }
 
 fn io_compensation_setup(syscfg: &pac::SYSCFG) {
@@ -564,7 +564,7 @@ const APP: () = {
         i2c: pac::I2C2,
         ethernet_periph: (pac::ETHERNET_MAC, pac::ETHERNET_DMA, pac::ETHERNET_MTL),
         cpu_dac: pac::DAC,
-        #[init([CPU_DAC {out: 0x000, en: false}; 2])]
+        #[init([CPU_DAC {out: 0, en: false}; 2])]
         cpu_dac_ch: [CPU_DAC; 2],
         #[init([[0.; 5]; 2])]
         iir_state: [IIRState; 2],
@@ -660,20 +660,20 @@ const APP: () = {
 
         // c.schedule.tick(Instant::now()).unwrap();
 
-        // enable cpu_dac clock
+        // // enable cpu_dac clock
         rcc.apb1lenr.modify(|_, w| w.dac12en().set_bit());
-        rcc.apb1lenr.read().bits();
+        // rcc.apb1lenr.read().bits();
         // manual suggests wait for domain to leave standby/sleep
         while rcc.cr.read().d2ckrdy().is_not_ready() {}
 
-        // configure cpu_dac
+        // // configure cpu_dac
         let cpu_dacx = dp.DAC;
         cpu_dac_setup(&cpu_dacx);
 
-        // read cpu_dac output registers
-        let dac1_out = cpu_dacx.dor1.read().dacc1dor().bits();
-        let dac2_out = cpu_dacx.dor2.read().dacc2dor().bits();
-        info!("dor1:2 {:x}:{:x}", dac1_out, dac2_out);
+        // // read cpu_dac output registers
+        // let dac1_out = cpu_dacx.dor1.read().dacc1dor().bits();
+        // let dac2_out = cpu_dacx.dor2.read().dacc2dor().bits();
+        // info!("dor1:2 {:x}:{:x}", dac1_out, dac2_out);
 
 
         init::LateResources {
@@ -757,7 +757,10 @@ const APP: () = {
                     server.poll(socket, |req: &Request| {
                         if req.channel < 2 {
                             iir_ch.lock(|iir_ch| iir_ch[req.channel as usize] = req.iir); // lock locks the resource and returns handle (rtfm)
-                            cpu_dac_ch[req.channel as usize] = req.cpu_dac;
+                            // uncommenting this breaks the interrupt loop
+                            // cpu_dac_ch[req.channel as usize] = req.cpu_dac;
+                            let gpiod = unsafe { &*pac::GPIOD::ptr() };
+                            gpiod.odr.modify(|_, w| w.odr6().low().odr12().low().odr5().high());  // FP_LED_1, FP_LED_3
                         }
                     });
                 }
@@ -771,21 +774,24 @@ const APP: () = {
                 // cortex_m::asm::wfi();
             }
 
-            c.resources.cpu_dac.cr.modify(|_, w| {
-                let mut temp = match cpu_dac_ch[0].en{
-                    true => w.en1().set_bit(),
-                    false => w.en1().clear_bit(),
-                };
-                match cpu_dac_ch[1].en{
-                    true => temp.en2().set_bit(),
-                    false => temp.en2().clear_bit(),
-                }
-            });
+            //uncommenting this breakes the interrupt
+            // c.resources.cpu_dac.cr.modify(|_, w| {
+            //     let mut temp = match cpu_dac_ch[0].en{
+            //         true => w.en1().set_bit(),
+            //         false => w.en1().clear_bit(),
+            //     };
+            //     match cpu_dac_ch[1].en{
+            //         true => temp.en2().set_bit(),
+            //         false => temp.en2().clear_bit(),
+            //     }
+            // });
 
-            c.resources.cpu_dac.dhr12r1.write(|w| unsafe {
-                w.dacc1dhr().bits(cpu_dac_ch[0].out)});
-            c.resources.cpu_dac.dhr12r2.write(|w| unsafe {
-                w.dacc2dhr().bits(cpu_dac_ch[1].out)});
+            //SPI intterupts break if using u16 method
+            c.resources.cpu_dac.dhr12r1.modify(|_, w| unsafe {
+                w.bits(cpu_dac_ch[0].out)});
+            // uncommenting this breaks the interrupt
+            // c.resources.cpu_dac.dhr12r2.modify(|_, w| unsafe {
+            //     w.bits(cpu_dac_ch[1].out)});
         }
     }
 
@@ -803,6 +809,8 @@ const APP: () = {
     fn spi1(c: spi1::Context) {
         #[cfg(feature = "bkpt")]
         cortex_m::asm::bkpt();
+        let gpiod = unsafe { &*pac::GPIOD::ptr() };
+        gpiod.odr.modify(|_, w| w.odr6().high().odr12().high());  // FP_LED_1, FP_LED_3
         let (spi1, spi2, spi4, spi5) = c.resources.spi;
         let iir_ch = c.resources.iir_ch;
         let iir_state = c.resources.iir_state;
@@ -860,7 +868,7 @@ const APP: () = {
 struct Request {
     channel: u8,
     iir: IIR,
-    cpu_dac: CPU_DAC
+    // cpu_dac: CPU_DAC
 }
 
 #[derive(Serialize)]

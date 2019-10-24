@@ -1,15 +1,9 @@
-use core::ops::{Add, Mul};
 use serde::{Serialize, Deserialize};
-// use serde::de::{self, Deserializer, Unexpected};
 
-use core::{f32, u16};
-
-// pub type CPU_DACState = [u16; 1];
 
 #[derive(Copy,Clone,Deserialize,Serialize)]
 pub struct CPU_DAC {
-    pub out: u16,
-    // #[serde(deserialize_with = "bool_from_int")]
+    pub out: u32,  // making this u16 breaks spi interrupt loop
     pub en: bool,
 }
 
@@ -17,7 +11,7 @@ pub struct CPU_DAC {
 impl CPU_DAC {
     pub fn set_scale_out(&mut self, out: f32) -> Result<(), &str> {
         // out 0 -> 1
-        self.out = (out * (0xfff as f32)) as u16;
+        self.out = (out * (0xfff as f32)) as u32;
         Ok(())
     }
 
