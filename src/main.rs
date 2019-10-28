@@ -623,7 +623,7 @@ const APP: () = {
         #[init([CPU_DAC {out: 0, en: false}; 2])]
         cpu_dac_ch: [CPU_DAC; 2],
         gpio_hdr_spi: pac::SPI3,  // different use to spi1/2/4/5
-        // #[init(storage::RingBuffer<u8> {
+        // #[init(storage::RingBuffer {
         //     storage: [0 as u8; storage::STORAGE_SIZE],
         //     tail: AtomicUsize::new(0),
         //     head: AtomicUsize::new(0),
@@ -715,9 +715,7 @@ const APP: () = {
         let dac2_out = cpu_dacx.dor2.read().dacc2dor().bits();
         info!("dor1:2 {:x}:{:x}", dac1_out, dac2_out);
 
-
-
-        let d: u16 = 0x7fff;
+        let d: u16 = 0x0000;
         let txdr = &spi3.txdr as *const _ as *mut u16;
         unsafe { ptr::write_volatile(txdr, d) };
 
@@ -858,7 +856,7 @@ const APP: () = {
                 }
             }
 
-            adc_logging.lock(|temp| info!("{:?}", *temp));
+            // adc_logging.lock(|temp| info!("{:?}", *temp));
             {
                 let socket = &mut *sockets.get::<net::socket::TcpSocket>(tcp_handle2);
                 if socket.state() == net::socket::TcpState::CloseWait {
@@ -868,7 +866,7 @@ const APP: () = {
                     socket.listen(1236).unwrap_or_else(|e| warn!("TCP listen error: {:?}", e));
                     adc_logging.lock(|adc_logging| *adc_logging = 0);
                     cortex_m::interrupt::free(|_| unsafe { storage::ADC_BUF.clear() });
-                    // info!("clear buf");
+                    info!("clear buf");
                 } else if socket.can_send() {
                     // info!("write");
                     socket.send(|buf| unsafe {
@@ -885,7 +883,7 @@ const APP: () = {
                 }
             }
 
-            adc_logging.lock(|temp| info!("{:?}", *temp));
+            // adc_logging.lock(|temp| info!("{:?}", *temp));
 
             if !match iface.poll(&mut sockets, net::time::Instant::from_millis(time as i64)) {
                 Ok(changed) => changed,
