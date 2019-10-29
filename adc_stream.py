@@ -3,6 +3,7 @@ import serial
 import logging
 import numpy as np
 
+from matplotlib import pyplot as plt
 from artiq.tools import add_common_args, init_logger
 
 logger = logging.getLogger(__name__)
@@ -33,3 +34,6 @@ if __name__ == "__main__":
     logging.debug([bin(i) for i in data_arr.view(np.uint8)])
 
     np.save(args.file, data_arr)
+
+    plt.plot(data_arr)
+    plt.show()
