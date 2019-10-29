@@ -68,7 +68,7 @@ if __name__=="__main__":
     nsd = np.abs(nsd) / np.sqrt(np.max(t))
     plt.plot(f[::plt_every_n],
              savgol_filter(nsd,
-                           np.max([plt_every_n, 10])+1,
+                           np.max((plt_every_n, 10))+1,
                            1)[::plt_every_n]*1e6)
     # plt.xlim([0,5e3])
 
@@ -85,3 +85,4 @@ if __name__=="__main__":
     plt.savefig("nsd.png", dpi=600)
     plt.savefig("nsd.pdf")
     # plt.show()
+    print("test rms voltage from NSD", np.sqrt(2*(f[1]-f[0])*np.sum(nsd**2)) )
