@@ -1,3 +1,7 @@
+"""
+Stream ADC samples from Stabilizer and save to file.
+"""
+
 import json
 import serial
 import logging

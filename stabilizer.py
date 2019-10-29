@@ -1,3 +1,5 @@
+"""Remote setting of the PID loop parameters as well as CPU-&SPI- DACs"""
+
 import json
 import asyncio
 from collections import OrderedDict as OD

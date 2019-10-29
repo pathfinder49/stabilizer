@@ -1,3 +1,5 @@
+"""Some plotting of adc-logs"""
+
 import numpy as np
 from matplotlib import pyplot as plt
 from numpy.fft import rfft, rfftfreq
