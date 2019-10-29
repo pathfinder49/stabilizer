@@ -244,6 +244,7 @@ fn gpio_setup(gpioa: &pac::GPIOA, gpiob: &pac::GPIOB, gpioc: &pac::GPIOC,
         w.moder2().output()
          .moder3().output()
     );
+    // low, low -> gain = 1
     gpiog.odr.modify(|_, w|
         w.odr2().low()
          .odr3().low()
@@ -855,23 +856,19 @@ const APP: () = {
                     });
                 }
             }
-
-            // adc_logging.lock(|temp| info!("{:?}", *temp));
             {
                 let socket = &mut *sockets.get::<net::socket::TcpSocket>(tcp_handle2);
                 if socket.state() == net::socket::TcpState::CloseWait {
                     socket.close();
-                    // info!("close");
+                    info!("close");
                 } else if !(socket.is_open() || socket.is_listening()) {
                     socket.listen(1236).unwrap_or_else(|e| warn!("TCP listen error: {:?}", e));
                     adc_logging.lock(|adc_logging| *adc_logging = 0);
                     cortex_m::interrupt::free(|_| unsafe { storage::ADC_BUF.clear() });
                     info!("clear buf");
                 } else if socket.can_send() {
-                    // info!("write");
                     socket.send(|buf| unsafe {
                         let sent = storage::ADC_BUF.dequeue_into(buf);
-                        // info!("{:?}", sent);
                         (sent, sent)
                     }).unwrap();
 
@@ -882,8 +879,6 @@ const APP: () = {
                                      })
                 }
             }
-
-            // adc_logging.lock(|temp| info!("{:?}", *temp));
 
             if !match iface.poll(&mut sockets, net::time::Instant::from_millis(time as i64)) {
                 Ok(changed) => changed,
@@ -966,11 +961,13 @@ const APP: () = {
             let rxdr = &spi5.rxdr as *const _ as *const u16;
             let a = unsafe { ptr::read_volatile(rxdr) };
             let x0 = f32::from(a as i16);
-            let y0 = iir_ch[1].update(&mut iir_state[1], x0);
-            let d = y0 as i16 as u16 ^ 0x8000;
-            let txdr = &spi4.txdr as *const _ as *mut u16;
-            unsafe { ptr::write_volatile(txdr, d) };
+            // let y0 = iir_ch[1].update(&mut iir_state[1], x0);
+            // let d = y0 as i16 as u16 ^ 0x8000;
         }
+        // work around for stabilizer_current_sense issue #9
+        let d = 0xff as u16;
+        let txdr = &spi4.txdr as *const _ as *mut u16;
+        unsafe { ptr::write_volatile(txdr, d) };
         #[cfg(feature = "bkpt")]
         cortex_m::asm::bkpt();
     }
